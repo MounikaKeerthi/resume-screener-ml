@@ -1,0 +1,12 @@
+# macOS system files
+.DS_Store
+
+# Virtual environment
+venv/
+
+# Uploaded files
+uploads/
+
+# Python cache
+__pycache__/
+*.pyc
