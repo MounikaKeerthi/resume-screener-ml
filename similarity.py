@@ -1,7 +1,11 @@
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
+from sentence_transformers import SentenceTransformer, util
+
+# Load model once globally (important for performance)
+model = SentenceTransformer("all-MiniLM-L6-v2")
 
 def semantic_similarity(resume_text, jd_text):
-    vectorizer = TfidfVectorizer()
-    vectors = vectorizer.fit_transform([resume_text, jd_text])
-    return cosine_similarity(vectors[0], vectors[1])[0][0]
+    resume_embedding = model.encode(resume_text, convert_to_tensor=True)
+    jd_embedding = model.encode(jd_text, convert_to_tensor=True)
+
+    similarity = util.cos_sim(resume_embedding, jd_embedding)
+    return similarity.item()
