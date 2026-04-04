@@ -1,9 +1,3 @@
-"""
-app.py - Flask API (V2)
-No major changes here — Flask is just the transport layer.
-The real logic lives in resume_parser.py
-"""
-
 from flask import Flask, request, jsonify
 import os
 from resume_parser import parse_resume

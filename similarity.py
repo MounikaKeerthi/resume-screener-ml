@@ -1,7 +1,12 @@
 from sentence_transformers import SentenceTransformer, util
+import streamlit as st
 
 # Load model once globally (important for performance)
-model = SentenceTransformer("all-MiniLM-L6-v2")
+@st.cache_resource
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
+
+model = load_model()
 
 def semantic_similarity(resume_text, jd_text):
     resume_embedding = model.encode(resume_text, convert_to_tensor=True)

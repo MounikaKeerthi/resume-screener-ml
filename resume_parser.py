@@ -1,25 +1,3 @@
-"""
-resume_parser.py - V2: Richer Parsing + Semantic Matching
-
-Key upgrades from V1:
-  1. Name extraction using spaCy NER
-  2. Expanded skill taxonomy (50+ skills vs 10)
-  3. Section-aware parsing (experience, education, skills sections)
-  4. Semantic similarity now uses real embeddings (via similarity.py V2)
-  5. Cleaner score breakdown
-
-CONCEPT: Named Entity Recognition (NER)
-----------------------------------------
-NER is the task of finding and classifying "named things" in text:
-  - PERSON   → "John Smith"
-  - ORG      → "Google", "MIT"
-  - DATE     → "January 2022", "3 years"
-  - GPE      → "New York" (Geo-Political Entity)
-
-spaCy's pre-trained model learned these patterns from millions of documents.
-We can use the PERSON entity to extract candidate names from the top of a resume.
-"""
-
 from typing import Optional
 import fitz  # PyMuPDF
 import re
@@ -28,14 +6,6 @@ from nlp_utils import preprocess_for_embeddings, extract_sections, clean_pdf_tex
 from similarity import semantic_similarity
 
 nlp = spacy.load("en_core_web_sm")
-
-
-# ---------------------------------------------------------------------------
-# Expanded Skill Taxonomy
-# ---------------------------------------------------------------------------
-# Grouped by category so we can report WHERE skills come from
-# CONCEPT: In V3, we'll replace this with ML-based skill extraction using NER
-# fine-tuned on job postings (e.g., the LinkedIn skill dataset)
 
 SKILL_TAXONOMY = {
     "languages": [
@@ -73,11 +43,6 @@ for category, skills in SKILL_TAXONOMY.items():
     for skill in skills:
         FLAT_SKILLS[skill] = category
 
-
-# ---------------------------------------------------------------------------
-# Extraction Functions
-# ---------------------------------------------------------------------------
-
 def extract_text_from_pdf(pdf_path: str) -> Optional[str]:
     """Extract raw text from a PDF file using PyMuPDF."""
     text = ""
@@ -99,19 +64,6 @@ def extract_phone(text: str) -> Optional[str]:
 
 
 def extract_name(text: str) -> Optional[str]:
-    """
-    Extract candidate name using spaCy NER.
-
-    Strategy: Only look at the first 300 characters of the resume.
-    Names almost always appear at the top, and looking at the whole
-    document would give us false positives (company names, etc.).
-
-    CONCEPT: NER Label "PERSON"
-    spaCy's model was trained to recognize human names. It uses:
-      - Capitalization patterns
-      - Surrounding context ("Dear [NAME]", first line of document)
-      - Character-level patterns common in names
-    """
     # Look at the header portion only
     header_text = clean_pdf_text(text[:300])
     doc = nlp(header_text)
@@ -124,17 +76,6 @@ def extract_name(text: str) -> Optional[str]:
 
 
 def extract_skills(text: str) -> dict:
-    """
-    Extract skills grouped by category.
-
-    Returns a dict like:
-    {
-        "languages": ["python", "java"],
-        "ml_ai": ["pytorch", "transformers"],
-        ...
-        "all": ["python", "java", "pytorch", ...]
-    }
-    """
     text_lower = text.lower()
     found_by_category = {cat: [] for cat in SKILL_TAXONOMY}
     all_found = []
@@ -154,15 +95,6 @@ def extract_skills(text: str) -> dict:
 
 
 def extract_years_of_experience(text: str) -> Optional[int]:
-    """
-    Heuristic to estimate years of experience.
-
-    Looks for patterns like "5 years of experience", "3+ years", etc.
-    Also counts date ranges in the experience section.
-
-    CONCEPT: This is a rule-based extraction. In V4, we'll ask an LLM
-    to extract this more reliably from unstructured text.
-    """
     # Pattern 1: Explicit mention ("5+ years of experience")
     explicit = re.search(
         r'(\d+)\+?\s*years?\s+of\s+(professional\s+)?(experience|expertise)',
@@ -183,27 +115,7 @@ def extract_years_of_experience(text: str) -> Optional[int]:
 
     return None
 
-
-# ---------------------------------------------------------------------------
-# Main Parse Function
-# ---------------------------------------------------------------------------
-
 def parse_resume(pdf_path: str, job_description: str = "") -> dict:
-    """
-    Main entry point: parse a resume and optionally score against a JD.
-
-    Scoring breakdown:
-      - semantic_similarity (70%): Are the resume and JD talking about
-        the same things? Uses sentence embeddings.
-      - skill_match_score (30%): What fraction of required JD skills
-        does the resume mention?
-
-    Why this weighting?
-      Semantic similarity catches broader alignment (domain, seniority,
-      responsibilities). Skill matching catches specific requirements.
-      The 70/30 split is a starting heuristic — in V5, we'll learn
-      this weighting from data.
-    """
     # Step 1: Extract raw text
     raw_text = extract_text_from_pdf(pdf_path)
 

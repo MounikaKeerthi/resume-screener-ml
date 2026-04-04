@@ -1,163 +1,264 @@
-"""
-streamlit_app.py - V2: Richer UI with score breakdown and skill gap analysis
-"""
-
 import streamlit as st
-import requests
+import tempfile
+import os
+from resume_parser import parse_resume
+from similarity import semantic_similarity
 
-# ── Page Config ──────────────────────────────────────────────────────────────
+# ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
-    page_title="Resume Matcher V2",
+    page_title="Resume Screener",
     page_icon="📄",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="collapsed"
 )
 
-# ── Header ────────────────────────────────────────────────────────────────────
-st.title("📄 Resume Matcher — V2")
-st.caption("Semantic similarity using Sentence Transformers (all-MiniLM-L6-v2)")
+# ── Custom CSS ────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+  /* Global */
+  html, body, [class*="css"] { font-family: 'Inter', sans-serif; }
+  .block-container { padding-top: 2rem; padding-bottom: 2rem; }
 
-st.info(
-    "**How scoring works:** 70% semantic similarity (embeddings) + "
-    "30% skill match. Semantic similarity understands *meaning*, "
-    "not just keyword overlap.",
-    icon="ℹ️"
-)
+  /* Hero banner */
+  .hero {
+    background: linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%);
+    border-radius: 16px;
+    padding: 2.5rem 2rem;
+    margin-bottom: 2rem;
+    text-align: center;
+    color: white;
+  }
+  .hero h1 { font-size: 2.2rem; font-weight: 800; margin: 0 0 0.5rem 0; }
+  .hero p  { font-size: 1.05rem; opacity: 0.85; margin: 0; }
 
-# ── Input Layout ──────────────────────────────────────────────────────────────
-col1, col2 = st.columns(2)
+  /* Cards */
+  .card {
+    background: white;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-bottom: 1.2rem;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.06);
+  }
+  .card h3 { color: #1e40af; font-size: 1.05rem; margin: 0 0 1rem 0; }
 
-with col1:
-    uploaded_file = st.file_uploader("📎 Upload Resume (PDF)", type=["pdf"])
+  /* Score circle */
+  .score-circle {
+    width: 120px; height: 120px;
+    border-radius: 50%;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    margin: 0 auto 1rem auto;
+    font-weight: 800;
+  }
+  .score-number { font-size: 2rem; line-height: 1; }
+  .score-label  { font-size: 0.7rem; opacity: 0.85; margin-top: 2px; }
 
-with col2:
+  .score-high   { background: linear-gradient(135deg,#16a34a,#4ade80); color:white; }
+  .score-medium { background: linear-gradient(135deg,#d97706,#fbbf24); color:white; }
+  .score-low    { background: linear-gradient(135deg,#dc2626,#f87171); color:white; }
+
+  /* Sub-scores */
+  .sub-score-row {
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 0.5rem 0; border-bottom: 1px solid #f1f5f9;
+  }
+  .sub-score-row:last-child { border-bottom: none; }
+  .sub-label { color: #475569; font-size: 0.9rem; }
+  .sub-value { font-weight: 700; font-size: 0.95rem; }
+
+  /* Skill chips */
+  .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 0.5rem; }
+  .chip {
+    padding: 4px 12px; border-radius: 20px;
+    font-size: 0.8rem; font-weight: 600;
+  }
+  .chip-found   { background:#dbeafe; color:#1d4ed8; }
+  .chip-missing { background:#fee2e2; color:#b91c1c; }
+
+  /* Analyze button */
+  div.stButton > button {
+    background: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%) !important;
+    color: white !important;
+    border: none !important;
+    border-radius: 10px !important;
+    padding: 0.75rem 2rem !important;
+    font-size: 1rem !important;
+    font-weight: 700 !important;
+    width: 100% !important;
+    cursor: pointer !important;
+    transition: opacity 0.2s !important;
+  }
+  div.stButton > button:hover { opacity: 0.9 !important; }
+
+  /* Info row in candidate panel */
+  .info-row {
+    display: flex; gap: 8px; align-items: flex-start;
+    padding: 6px 0; border-bottom: 1px solid #f1f5f9;
+    font-size: 0.9rem;
+  }
+  .info-row:last-child { border-bottom: none; }
+  .info-key { color: #64748b; min-width: 120px; font-weight: 600; }
+  .info-val { color: #1e293b; }
+
+  /* Verdict banner */
+  .verdict {
+    border-radius: 10px; padding: 1rem 1.5rem;
+    font-weight: 700; font-size: 1rem;
+    margin-bottom: 1rem; text-align: center;
+  }
+  .verdict-strong { background:#dcfce7; color:#15803d; border:1px solid #86efac; }
+  .verdict-good   { background:#dbeafe; color:#1d4ed8; border:1px solid #93c5fd; }
+  .verdict-low    { background:#fee2e2; color:#b91c1c; border:1px solid #fca5a5; }
+</style>
+""", unsafe_allow_html=True)
+
+def score_color_class(score):
+    if score >= 65: return "score-high"
+    if score >= 40: return "score-medium"
+    return "score-low"
+
+def verdict_class(score):
+    if score >= 65: return "verdict-strong", "🟢 Strong Match — Great fit for this role!"
+    if score >= 40: return "verdict-good",   "🔵 Moderate Match — Some gaps to address."
+    return "verdict-low", "🔴 Low Match — Significant skill gaps detected."
+
+
+#Header
+st.markdown("""
+<div class="hero">
+  <h1>📄 AI Resume Screener</h1>
+  <p>Instantly match resumes against job descriptions using semantic AI analysis</p>
+</div>
+""", unsafe_allow_html=True)
+
+
+#Inputs
+col_left, col_right = st.columns([1, 1], gap="large")
+
+with col_left:
+    st.markdown("#### 📤 Upload Resume (PDF)")
+    uploaded_file = st.file_uploader("", type=["pdf"], label_visibility="collapsed")
+
+with col_right:
+    st.markdown("#### 📋 Paste Job Description")
     job_description = st.text_area(
-        "📋 Paste Job Description",
-        height=200,
-        placeholder="Paste the full job description here..."
+        "", height=220,
+        placeholder="Paste the full job description here...",
+        label_visibility="collapsed"
     )
 
-analyze_btn = st.button("🔍 Analyze Match", type="primary", use_container_width=True)
+st.markdown("---")
+analyze_clicked = st.button("⚡ Analyze Resume", use_container_width=True)
 
-# ── Analysis ──────────────────────────────────────────────────────────────────
-if analyze_btn:
-    if uploaded_file is None:
-        st.error("Please upload a resume PDF.")
-        st.stop()
 
-    with st.spinner("Running semantic analysis... (first run may take ~10s to load the model)"):
-        files = {"resume": (uploaded_file.name, uploaded_file, "application/pdf")}
-        data = {"job_description": job_description}
-
-        try:
-            response = requests.post(
-                "http://127.0.0.1:5000/parse-resume",
-                files=files,
-                data=data,
-                timeout=60
-            )
-        except requests.exceptions.ConnectionError:
-            st.error("❌ Cannot connect to Flask server. Make sure `app.py` is running.")
-            st.code("python app.py", language="bash")
-            st.stop()
-
-    if response.status_code != 200:
-        st.error(f"Server error: {response.text}")
-        st.stop()
-
-    result = response.json()
-
-    # ── Candidate Info ────────────────────────────────────────────────────────
-    st.success("✅ Analysis complete!")
-    st.divider()
-
-    st.subheader("👤 Candidate Info")
-    info_col1, info_col2, info_col3, info_col4 = st.columns(4)
-
-    info_col1.metric("Name", result.get("candidate_name") or "Not found")
-    info_col2.metric("Email", result.get("email") or "Not found")
-    info_col3.metric("Phone", result.get("phone") or "Not found")
-    info_col4.metric(
-        "Est. Experience",
-        f"{result.get('estimated_years_experience')} yrs"
-        if result.get("estimated_years_experience") else "Not found"
-    )
-
-    st.divider()
-
-    # ── Match Scores ──────────────────────────────────────────────────────────
-    if result.get("final_match_score") is not None:
-        st.subheader("🎯 Match Scores")
-
-        score_col1, score_col2, score_col3 = st.columns(3)
-
-        final = result["final_match_score"]
-        semantic = result["semantic_similarity"]
-        skill = result["skill_match_score"]
-
-        # Color-coded final score
-        score_color = (
-            "🟢" if final >= 0.8 else
-            "🟡" if final >= 0.6 else
-            "🟠" if final >= 0.4 else "🔴"
-        )
-        guide = result.get("_score_guide", {})
-        label = next((v for k, v in guide.items()
-                      if float(k.split(" - ")[0]) <= final <= float(k.split(" - ")[1])), "")
-
-        score_col1.metric(
-            f"{score_color} Final Match Score",
-            f"{final:.1%}",
-            label
-        )
-        score_col2.metric(
-            "🧠 Semantic Similarity (70%)",
-            f"{semantic:.1%}",
-            "Embedding-based — understands meaning"
-        )
-        score_col3.metric(
-            "🔑 Skill Match (30%)",
-            f"{skill:.1%}",
-            "Keyword matching against JD"
-        )
-
-        # Progress bar for final score
-        st.progress(final, text=f"Overall match: {final:.1%}")
-
-        st.divider()
-
-    # ── Skills ────────────────────────────────────────────────────────────────
-    st.subheader("🛠️ Skills Found in Resume")
-
-    resume_skills = result.get("resume_skills", {})
-    if resume_skills:
-        skill_display = {k: v for k, v in resume_skills.items() if k != "all"}
-        for category, skills in skill_display.items():
-            if skills:
-                st.write(f"**{category.replace('_', ' ').title()}:** {', '.join(skills)}")
+#Analysis
+if analyze_clicked:
+    if not uploaded_file:
+        st.warning("⚠️ Please upload a PDF resume.")
+    elif not job_description.strip():
+        st.warning("⚠️ Please paste a job description.")
     else:
-        st.write("No skills detected from the taxonomy.")
+        with st.spinner("Analyzing resume…"):
+            try:
+                # Save PDF to temp
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(uploaded_file.read())
+                    tmp_path = tmp.name
 
-    # ── Skill Gap Analysis ────────────────────────────────────────────────────
-    missing = result.get("missing_skills", [])
-    if missing:
-        st.divider()
-        st.subheader("⚠️ Skill Gap Analysis")
-        st.warning(
-            f"These skills were required in the JD but **not found** in the resume: "
-            f"**{', '.join(missing)}**"
-        )
-        st.caption(
-            "💡 Tip: Add these to your resume if you have experience with them, "
-            "or prioritize learning them."
-        )
+                # Parse & score
+                resume_data = parse_resume(tmp_path, job_description)
+                results = resume_data
+                os.unlink(tmp_path)
 
-    # ── Sections Detected ─────────────────────────────────────────────────────
-    sections_found = result.get("sections_found", [])
-    if sections_found:
-        st.divider()
-        st.subheader("📑 Resume Sections Detected")
-        st.write(", ".join(s.title() for s in sections_found))
+                final_score  = round(results.get("final_match_score", 0) * 100, 1)
+                semantic     = round(results.get("semantic_similarity", 0) * 100, 1)
+                skill_match  = round(results.get("skill_match_score", 0) * 100, 1)
+                found_skills = found_skills = resume_data.get("resume_skills", {}).get("all", [])
+                missing      = results.get("missing_skills", [])
+                name         = resume_data.get("candidate_name", "—")
+                exp          = resume_data.get("estimated_years_experience", "—")
+                email        = resume_data.get("email", "—")
 
-    # ── Raw JSON ──────────────────────────────────────────────────────────────
-    with st.expander("🔍 Raw API Response (for debugging)"):
-        st.json(result)
+                #Verdict banner
+                v_class, v_text = verdict_class(final_score)
+                st.markdown(f'<div class="verdict {v_class}">{v_text}</div>', unsafe_allow_html=True)
+
+                #Three columns: score | candidate | sub-scores
+                c1, c2, c3 = st.columns([1, 1.4, 1.4], gap="large")
+
+                # Overall score circle
+                with c1:
+                    sc = score_color_class(final_score)
+                    st.markdown(f"""
+                    <div class="card" style="text-align:center;">
+                      <h3>Overall Match</h3>
+                      <div class="score-circle {sc}">
+                        <div class="score-number">{final_score}%</div>
+                        <div class="score-label">MATCH SCORE</div>
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+                # Candidate info
+                with c2:
+                    st.markdown(f"""
+                    <div class="card">
+                      <h3>👤 Candidate Info</h3>
+                      <div class="info-row"><span class="info-key">Name</span><span class="info-val">{name}</span></div>
+                      <div class="info-row"><span class="info-key">Email</span><span class="info-val">{email}</span></div>
+                      <div class="info-row"><span class="info-key">Experience</span><span class="info-val">{exp} years</span></div>
+                      <div class="info-row"><span class="info-key">Skills Found</span><span class="info-val">{len(found_skills)}</span></div>
+                      <div class="info-row"><span class="info-key">Skills Missing</span><span class="info-val">{len(missing)}</span></div>
+                    </div>""", unsafe_allow_html=True)
+
+                # Sub-scores
+                with c3:
+                    def sub_color(v):
+                        if v >= 65: return "#16a34a"
+                        if v >= 40: return "#d97706"
+                        return "#dc2626"
+
+                    st.markdown(f"""
+                    <div class="card">
+                      <h3>📊 Score Breakdown</h3>
+                      <div class="sub-score-row">
+                        <span class="sub-label">🧠 Semantic Match</span>
+                        <span class="sub-value" style="color:{sub_color(semantic)}">{semantic}%</span>
+                      </div>
+                      <div class="sub-score-row">
+                        <span class="sub-label">🛠️ Skill Match</span>
+                        <span class="sub-value" style="color:{sub_color(skill_match)}">{skill_match}%</span>
+                      </div>
+                      <div class="sub-score-row">
+                        <span class="sub-label">⭐ Final Score</span>
+                        <span class="sub-value" style="color:{sub_color(final_score)}">{final_score}%</span>
+                      </div>
+                    </div>""", unsafe_allow_html=True)
+
+                #Skills panels
+                sk1, sk2 = st.columns(2, gap="large")
+
+                with sk1:
+                    chips = "".join(f'<span class="chip chip-found">{s}</span>' for s in found_skills[:20])
+                    st.markdown(f"""
+                    <div class="card">
+                      <h3>✅ Skills Detected ({len(found_skills)})</h3>
+                      <div class="chip-row">{chips if chips else "No skills detected"}</div>
+                    </div>""", unsafe_allow_html=True)
+
+                with sk2:
+                    chips_m = "".join(f'<span class="chip chip-missing">{s}</span>' for s in missing[:20])
+                    st.markdown(f"""
+                    <div class="card">
+                      <h3>❌ Missing Skills ({len(missing)})</h3>
+                      <div class="chip-row">{chips_m if chips_m else "🎉 No major gaps found!"}</div>
+                    </div>""", unsafe_allow_html=True)
+
+                #Progress bars
+                st.markdown("#### 📈 Visual Score Breakdown")
+                st.progress(semantic / 100, text=f"Semantic Similarity: {semantic}%")
+                st.progress(skill_match / 100, text=f"Skill Match: {skill_match}%")
+                st.progress(final_score / 100, text=f"Final Score: {final_score}%")
+
+            except Exception as e:
+                st.error(f"Error during analysis: {e}")
