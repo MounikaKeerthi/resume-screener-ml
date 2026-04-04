@@ -6,7 +6,7 @@ PyMuPDF>=1.25.0
 
 # NLP
 spacy>=3.7.0
-# After pip install, also run: python -m spacy download en_core_web_sm
+https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
 # V2 UPGRADE: Sentence Transformers (replaces TF-IDF for similarity)
 sentence-transformers>=2.2.0
