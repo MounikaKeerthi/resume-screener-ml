@@ -39,27 +39,23 @@ def preprocess_for_embeddings(text: str) -> str:
 def extract_sections(text: str) -> dict:
     text_lower = text.lower()
 
-    # Common section header patterns in resumes
     section_patterns = {
-        "summary":    r"(summary|objective|profile|about me)",
-        "experience": r"(experience|work history|employment|work experience)",
-        "education":  r"(education|academic|qualifications|degrees?)",
-        "skills":     r"(skills|technical skills|competencies|technologies)",
-        "projects":   r"(projects|personal projects|portfolio)",
-        "certifications": r"(certifications?|certificates?|licenses?)",
+        "summary":        r"^\s*(summary|objective|profile|about me|professional summary)\s*$",
+        "experience":     r"^\s*(experience|work history|employment|professional experience|work experience)\s*$",
+        "education":      r"^\s*(education|academic|qualifications|degrees?)\s*$",
+        "skills":         r"^\s*(skills|technical skills|competencies|technologies)\s*$",
+        "projects":       r"^\s*(projects|personal projects|portfolio)\s*$",
+        "certifications": r"^\s*(certifications?|certificates?|licenses?)\s*$",
     }
 
-    # Find where each section starts
     section_starts = {}
     for section, pattern in section_patterns.items():
-        match = re.search(pattern, text_lower)
+        match = re.search(pattern, text_lower, re.MULTILINE)
         if match:
             section_starts[section] = match.start()
 
-    # Sort sections by their position in the document
     sorted_sections = sorted(section_starts.items(), key=lambda x: x[1])
 
-    # Extract text between consecutive section starts
     sections = {}
     for i, (section_name, start_pos) in enumerate(sorted_sections):
         end_pos = sorted_sections[i + 1][1] if i + 1 < len(sorted_sections) else len(text)

@@ -7,6 +7,7 @@ from similarity import semantic_similarity
 import anthropic
 from dotenv import load_dotenv
 import os
+from datetime import datetime
 
 load_dotenv()
 
@@ -107,34 +108,28 @@ def extract_skills(text: str) -> dict:
 
     return found_by_category
 
-
 def extract_years_of_experience(text: str) -> Optional[int]:
-    # Pattern 1: Explicit mention ("5+ years of experience")
-    explicit = re.search(
-        r'(\d+)\+?\s*years?\s+of\s+(professional\s+)?(experience|expertise)',
-        text.lower()
-    )
-    if explicit:
-        return int(explicit.group(1))
-
-    # Pattern 2: Scope to EXPERIENCE section only to avoid education/project dates
     sections = extract_sections(text)
     experience_text = (
         sections.get("experience") or
         sections.get("work experience") or
         sections.get("employment") or
-        text  # fallback to full text if no section found
+        text
     )
 
     year_ranges = re.findall(
-        r'(20\d{2})\s*[-–]\s*(20\d{2}|present|current)',
+        r'(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)?\.?\s*(20\d{2})\s*[-–]\s*(?:(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)?\.?\s*(20\d{2})|present|current)',
         experience_text.lower()
     )
+
     if year_ranges:
         total_months = 0
-        current_year = 2026
+        current_year = datetime.now().year  # always correct year
         for start, end in year_ranges:
-            end_year = current_year if end in ("present", "current") else int(end)
+            if end in ("present", "current", ""):
+                end_year = current_year
+            else:
+                end_year = int(end)
             total_months += max(0, end_year - int(start)) * 12
         return max(1, round(total_months / 12))
 
