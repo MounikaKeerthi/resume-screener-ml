@@ -148,6 +148,8 @@ with col_right:
         label_visibility="collapsed"
     )
 
+ai_checkbox = st.checkbox("✨ Generate AI Explanation (uses Claude API — may be slow)")
+
 st.markdown("---")
 analyze_clicked = st.button("⚡ Analyze Resume", use_container_width=True)
 
@@ -167,7 +169,7 @@ if analyze_clicked:
                     tmp_path = tmp.name
 
                 # Parse & score
-                resume_data = parse_resume(tmp_path, job_description)
+                resume_data = parse_resume(tmp_path, job_description, generate_explanation=ai_checkbox)
                 results = resume_data
                 os.unlink(tmp_path)
 
@@ -259,6 +261,15 @@ if analyze_clicked:
                 st.progress(semantic / 100, text=f"Semantic Similarity: {semantic}%")
                 st.progress(skill_match / 100, text=f"Skill Match: {skill_match}%")
                 st.progress(final_score / 100, text=f"Final Score: {final_score}%")
+
+                # AI Explanation
+                ai_explanation = results.get("ai_explanation")
+                if ai_explanation:
+                    st.markdown("""
+                    <div class="card">
+                      <h3>🤖 AI Explanation</h3>
+                    </div>""", unsafe_allow_html=True)
+                    st.info(ai_explanation)
 
             except Exception as e:
                 st.error(f"Error during analysis: {e}")

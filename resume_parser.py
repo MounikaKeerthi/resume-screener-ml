@@ -4,6 +4,11 @@ import re
 import spacy
 from nlp_utils import preprocess_for_embeddings, extract_sections, clean_pdf_text
 from similarity import semantic_similarity
+import anthropic
+from dotenv import load_dotenv
+import os
+
+load_dotenv()
 
 nlp = spacy.load("en_core_web_sm")
 
@@ -64,19 +69,28 @@ def extract_phone(text: str) -> Optional[str]:
 
 
 def extract_name(text: str) -> Optional[str]:
-    # Look at the header portion only
-    header_text = clean_pdf_text(text[:300])
-    doc = nlp(header_text)
-
-    for ent in doc.ents:
-        if ent.label_ == "PERSON":
-            return ent.text
-
+    # Split BEFORE cleaning — cleaning removes newlines
+    lines = text[:300].split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        # Take text before any | character
+        line = line.split('|')[0].strip()
+        # Valid name line: 2-4 words, all capitalized, no digits or special chars
+        tokens = line.split()
+        if (2 <= len(tokens) <= 4
+                and all(t[0].isupper() for t in tokens)
+                and not any(char.isdigit() for char in line)
+                and '@' not in line):
+            return line
+    
     return None
 
 
 def extract_skills(text: str) -> dict:
-    text_lower = text.lower()
+    text_lower = re.sub(r'\s+', ' ', text.lower())
     found_by_category = {cat: [] for cat in SKILL_TAXONOMY}
     all_found = []
 
@@ -103,21 +117,35 @@ def extract_years_of_experience(text: str) -> Optional[int]:
     if explicit:
         return int(explicit.group(1))
 
-    # Pattern 2: Count year ranges in work history (e.g., "2019 - 2023")
-    year_ranges = re.findall(r'(20\d{2})\s*[-–]\s*(20\d{2}|present|current)', text.lower())
+    # Pattern 2: Scope to EXPERIENCE section only to avoid education/project dates
+    sections = extract_sections(text)
+    experience_text = (
+        sections.get("experience") or
+        sections.get("work experience") or
+        sections.get("employment") or
+        text  # fallback to full text if no section found
+    )
+
+    year_ranges = re.findall(
+        r'(20\d{2})\s*[-–]\s*(20\d{2}|present|current)',
+        experience_text.lower()
+    )
     if year_ranges:
-        total_years = 0
-        current_year = 2025
+        total_months = 0
+        current_year = 2026
         for start, end in year_ranges:
             end_year = current_year if end in ("present", "current") else int(end)
-            total_years += max(0, end_year - int(start))
-        return total_years
+            total_months += max(0, end_year - int(start)) * 12
+        return max(1, round(total_months / 12))
 
     return None
 
-def parse_resume(pdf_path: str, job_description: str = "") -> dict:
+def parse_resume(pdf_path: str, job_description: str = "", generate_explanation: bool = False) -> dict:
     # Step 1: Extract raw text
     raw_text = extract_text_from_pdf(pdf_path)
+
+    # TEMP DEBUG
+    print(repr(raw_text[raw_text.lower().find('machine'):raw_text.lower().find('machine')+20]))
 
     # Step 2: Parse structured fields
     name = extract_name(raw_text)
@@ -158,6 +186,19 @@ def parse_resume(pdf_path: str, job_description: str = "") -> dict:
         # Weighted final score
         final_score = round(0.7 * semantic_score + 0.3 * skill_match_score, 4)
 
+    
+    #AI explanation
+    ai_explanation = None
+    if job_description and final_score is not None and generate_explanation:
+        ai_explanation = generate_ai_explanation(
+            candidate_name=name or "The candidate",
+            final_score=final_score,
+            semantic_score=semantic_score,
+            skill_score=skill_match_score,
+            missing_skills=missing_skills,
+            job_description=job_description
+        )
+
     return {
         # Candidate info
         "candidate_name": name,
@@ -184,5 +225,38 @@ def parse_resume(pdf_path: str, job_description: str = "") -> dict:
             "0.6 - 0.8": "Good match",
             "0.4 - 0.6": "Partial match",
             "0.0 - 0.4": "Low match"
-        }
+        },
+
+        "ai_explanation": ai_explanation
     }
+
+def generate_ai_explanation(
+    candidate_name: str,
+    final_score: float,
+    semantic_score: float,
+    skill_score: float,
+    missing_skills: list,
+    job_description: str
+) -> str:
+    client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+    
+    jd_snippet = job_description[:300]
+    
+    prompt = f"""You are an expert recruiter. Explain in 3-4 sentences why {candidate_name} got a {round(final_score * 100, 1)}% match score for this role.
+
+    Scores:
+    - Semantic similarity: {round(semantic_score * 100, 1)}%
+    - Skill match: {round(skill_score * 100, 1)}%
+    - Missing skills: {', '.join(missing_skills) if missing_skills else 'None'}
+
+    Job description (first 300 chars): {jd_snippet}
+
+    Be specific, helpful and encouraging. Tell them what's working and what to improve."""
+
+    message = client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=1000,
+        messages=[{"role": "user", "content": prompt}]
+    )
+    
+    return message.content[0].text
